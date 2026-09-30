@@ -16,7 +16,46 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 
-const API_URL = 'https://webpd411.itstep.click/api/Account/Register';
+const API_URL = 'https://webpd411.itstep.click/account/register';
+const LEGACY_API_URL = 'https://webpd411.itstep.click/api/account/register';
+
+function getServerErrorMessage(data, responseText, status) {
+    const messages = [];
+    const getMessages = (value) => {
+        if (typeof value === 'string' && value.trim()) {
+            return [value.trim()];
+        }
+        if (Array.isArray(value)) {
+            return value.flatMap(getMessages);
+        }
+        if (value && typeof value === 'object') {
+            return getMessages(value.description || value.message || value.title || value.error);
+        }
+        return [];
+    };
+
+    if (data && typeof data === 'object') {
+        if (data.errors && typeof data.errors === 'object' && !Array.isArray(data.errors)) {
+            Object.entries(data.errors).forEach(([field, errors]) => {
+                getMessages(errors).forEach((message) => messages.push(`${field}: ${message}`));
+            });
+        } else {
+            messages.push(...getMessages(data.errors));
+        }
+        messages.push(...getMessages(data.message));
+        messages.push(...getMessages(data.detail));
+        messages.push(...getMessages(data.title));
+        messages.push(...getMessages(data.error));
+    } else {
+        messages.push(...getMessages(data));
+    }
+
+    if (messages.length === 0 && responseText.trim() && !responseText.trim().startsWith('<')) {
+        messages.push(responseText.trim());
+    }
+
+    return [...new Set(messages)].join('\n') || `Помилка сервера (код ${status})`;
+}
 
 export default function RegisterScreen({ navigation }) {
     const [firstName, setFirstName] = useState('');
@@ -45,7 +84,7 @@ export default function RegisterScreen({ navigation }) {
     };
 
     const handleRegister = async () => {
-        if (!email.trim() || !password || !confirmPassword || !image) {
+        if (!firstName.trim() || !lastName.trim() || !email.trim() || !password || !confirmPassword || !image) {
             Alert.alert('Помилка', 'Заповніть усі поля та виберіть фото');
             return;
         }
@@ -67,43 +106,54 @@ export default function RegisterScreen({ navigation }) {
             formData.append('Email', email.trim());
             formData.append('Password', password);
             formData.append('ConfirmPassword', confirmPassword);
-            formData.append('ImageFile', {
+            formData.append('Image', {
                 uri: image.uri,
                 name: image.fileName || 'photo.jpg',
                 type: image.mimeType || 'image/jpeg',
             });
 
-            const response = await fetch(API_URL, {
+            const requestOptions = {
                 method: 'POST',
                 headers: {
                     Accept: 'application/json',
                 },
                 body: formData,
-            });
+            };
+            let response = await fetch(API_URL, requestOptions);
+            if (response.status === 404) {
+                response = await fetch(LEGACY_API_URL, requestOptions);
+            }
 
-            const data = await response.json().catch(() => ({}));
+            const responseText = await response.text();
+            let data = null;
+            if (responseText) {
+                try {
+                    data = JSON.parse(responseText);
+                } catch {
+                    data = null;
+                }
+            }
 
-            if (response.ok && data.token) {
+            if (response.ok && data && data.token) {
                 await AsyncStorage.setItem('userToken', data.token);
                 Alert.alert('Успіх', 'Реєстрація виконана успішно!', [
                     {
                         text: 'OK',
                         onPress: () => {
                             if (navigation && typeof navigation.navigate === 'function') {
-                                navigation.navigate('Home');
+                                navigation.navigate('Login');
                             }
                         },
                     },
                 ]);
-            } else if (data.errors) {
-                const messages = Object.values(data.errors).flat().join('\n');
-                Alert.alert('Помилка реєстрації', messages);
             } else {
-                const errorMessage = data.error || data.title || data.message || 'Не вдалося зареєструватися';
+                const errorMessage = response.ok
+                    ? 'Сервер не повернув токен авторизації'
+                    : getServerErrorMessage(data, responseText, response.status);
                 Alert.alert('Помилка реєстрації', errorMessage);
             }
         } catch (error) {
-            Alert.alert('Помилка мережі', 'Не вдалося зєднатися із сервером');
+            Alert.alert('Помилка мережі', "Не вдалося з'єднатися із сервером. Перевірте підключення до інтернету.");
         } finally {
             setLoading(false);
         }

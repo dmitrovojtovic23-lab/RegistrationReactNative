@@ -60,6 +60,7 @@ public class AccountController : ControllerBase
     }
 
     [HttpPost]
+    [HttpPost("/account/register")]
     [Consumes("multipart/form-data")]
     public async Task<IActionResult> Register([FromForm] RegisterModel model)
     {
@@ -101,7 +102,15 @@ public class AccountController : ControllerBase
             return BadRequest(new { errors = createResult.Errors.Select(e => e.Description) });
         }
 
-        await _userManager.AddToRoleAsync(user, "User");
+        var roleResult = await _userManager.AddToRoleAsync(user, "User");
+        if (!roleResult.Succeeded)
+        {
+            var deleteResult = await _userManager.DeleteAsync(user);
+            _imageService.DeleteImageIfExists(imageName);
+            var errors = roleResult.Errors.Select(e => e.Description)
+                .Concat(deleteResult.Errors.Select(e => e.Description));
+            return BadRequest(new { errors });
+        }
 
         var roles = await _userManager.GetRolesAsync(user);
         var token = _jwtTokenService.GenerateToken(user, roles);
